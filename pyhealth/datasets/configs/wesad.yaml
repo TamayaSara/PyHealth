@@ -1,0 +1,10 @@
+version: "1.0.0"
+tables:
+  eda:
+    file_path: "wesad-pyhealth.csv"
+    patient_id: "subject_id"
+    timestamp: null
+    attributes:
+    - "record_id"
+    - "archive_path"
+    - "member_path"
