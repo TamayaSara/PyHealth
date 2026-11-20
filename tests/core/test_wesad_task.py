@@ -1,5 +1,6 @@
 """Synthetic archive tests for WESAD wrist EDA stress classification."""
 
+import gc
 import pickle
 import tempfile
 import unittest
@@ -8,6 +9,7 @@ from zipfile import ZipFile
 
 import numpy as np
 import torch
+from litdata.streaming.shuffle import NoShuffle, Shuffle
 
 from pyhealth.datasets import WESADDataset
 from pyhealth.tasks import WESADStressClassification
@@ -21,14 +23,18 @@ class TestWESADStressClassification(unittest.TestCase):
         self.root = Path(self.tmp.name)
         self.cache = self.root / "processed"
 
-    def dataset(self, eda, labels):
+    def dataset(self, eda, labels, *, legacy_pickle=False):
         member_path = "WESAD/S2/S2.pkl"
         recording = {
             "signal": {"wrist": {"EDA": np.asarray(eda, dtype=np.float32)}},
             "label": np.asarray(labels, dtype=np.int64),
         }
+        payload = pickle.dumps(recording, protocol=2 if legacy_pickle else None)
+        if legacy_pickle:
+            # Insert a Python 2 short string with a non-ASCII byte before STOP.
+            payload = payload[:-1] + b"U\x04noteU\x01\xa3s."
         with ZipFile(self.root / "WESAD.zip", "w") as archive:
-            archive.writestr(member_path, pickle.dumps(recording))
+            archive.writestr(member_path, payload)
         return WESADDataset(str(self.root), cache_dir=self.cache)
 
     def test_sampling_rates_label_codes_and_archive_alignment(self):
@@ -45,7 +51,7 @@ class TestWESADStressClassification(unittest.TestCase):
                 np.full(1400, 2),
             ]
         )
-        dataset = self.dataset(eda, labels)
+        dataset = self.dataset(eda, labels, legacy_pickle=True)
         patient = dataset.get_patient("S2")
         samples = WESADStressClassification(window_seconds=2)(patient)
 
@@ -72,23 +78,31 @@ class TestWESADStressClassification(unittest.TestCase):
             ]
         )
         dataset = self.dataset(eda, labels)
+        # LitData's shuffle caches retain readers from the intermediate task data.
+        # Cleanups run in reverse order, before TemporaryDirectory.cleanup.
+        self.addCleanup(gc.collect)
+        self.addCleanup(Shuffle.get_len.cache_clear)
+        self.addCleanup(NoShuffle.get_chunks_and_intervals_per_workers.cache_clear)
         for window_seconds, expected_count, expected_samples in (
             (2, 6, 8),
             (3, 4, 12),
         ):
             with self.subTest(window_seconds=window_seconds):
-                samples = dataset.set_task(
+                with dataset.set_task(
                     WESADStressClassification(window_seconds=window_seconds),
                     num_workers=1,
-                )
-                self.assertEqual(len(samples), expected_count)
-                self.assertEqual(
-                    tuple(samples[0]["signal"].shape), (1, expected_samples)
-                )
-                label_processor = samples.output_processors["label"]
-                self.assertEqual(
-                    set(label_processor.label_vocab), {"baseline", "stress"}
-                )
+                ) as samples:
+                    try:
+                        self.assertEqual(len(samples), expected_count)
+                        self.assertEqual(
+                            tuple(samples[0]["signal"].shape), (1, expected_samples)
+                        )
+                        label_processor = samples.output_processors["label"]
+                        self.assertEqual(
+                            set(label_processor.label_vocab), {"baseline", "stress"}
+                        )
+                    finally:
+                        samples.reset()
 
     def test_discards_mixed_other_and_incomplete_windows(self):
         eda = np.arange(24, dtype=np.float32)

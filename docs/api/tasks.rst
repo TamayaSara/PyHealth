@@ -72,9 +72,10 @@ WESAD wrist EDA stress classification
 --------------------------------------
 
 The WESAD adapter indexes each participant's ``WESAD.zip`` member without
-extracting it. ``WESADStressClassification`` loads wrist EDA at 4 Hz and the
-recording labels at 700 Hz, then creates non-overlapping windows of a
-configurable duration:
+extracting it. ``WESADStressClassification`` reads the original recording
+pickle directly from the ZIP using the event's ``archive_path`` and
+``member_path``. It aligns each wrist EDA sample at 4 Hz with 175 recording
+labels at 700 Hz and creates non-overlapping windows of configurable duration.
 
 .. code-block:: python
 
@@ -85,9 +86,77 @@ configurable duration:
     samples = dataset.set_task(WESADStressClassification(window_seconds=60))
 
 Label code 1 means baseline and code 2 means stress. A window is kept only
-when all its 700 Hz labels have the same target code; windows containing a
-transition or any other code (0 or 3-7) are discarded rather than assigned a
-majority label. Only complete windows are emitted.
+when all its 700 Hz labels have the same target code. Mixed-label windows
+have no single state across the full interval, and codes 0 and 3–7 fall
+outside the two target classes. Incomplete windows lack enough aligned EDA
+and labels to fill the configured duration.
+
+Each window contains a raw wrist EDA tensor of shape ``(1, 240)`` at the
+default 60-second duration. The task emits a ``baseline`` or ``stress``
+label and preserves ``patient_id`` for participant-level splits.
+``set_task`` encodes the label using the fitted multiclass processor.
+
+Validation
+~~~~~~~~~~
+
+All 12 WESAD adapter and task tests passed on Windows using Pixi. Real-data
+validation covered all 15 participants using complete, non-overlapping
+60-second windows. The task produced 434 windows (282 baseline and 152
+stress). Every signal had shape ``(1, 240)`` and all values were finite.
+These results describe data validation. The run did not measure model performance.
+
+Run the combined tests from the repository root:
+
+.. code-block:: powershell
+
+    pixi run -e test python -m unittest discover -s tests/core -p "test_wesad*.py" -v
+
+To repeat the real-data validation, save this example as
+``validate_wesad.py``. Pass the directory containing ``WESAD.zip`` and a
+writable cache directory. Keep the archive zipped. The script uses one
+worker and checks every signal before printing the label counts.
+
+.. code-block:: python
+
+    import argparse
+    from collections import Counter
+
+    from pyhealth.datasets import WESADDataset
+    from pyhealth.tasks import WESADStressClassification
+
+
+    def main():
+        parser = argparse.ArgumentParser()
+        parser.add_argument("--dataset-root", required=True)
+        parser.add_argument("--cache-dir", required=True)
+        args = parser.parse_args()
+
+        dataset = WESADDataset(root=args.dataset_root, cache_dir=args.cache_dir)
+        task = WESADStressClassification(window_seconds=60)
+        counts = Counter()
+        with dataset.set_task(task, num_workers=1) as samples:
+            vocab = samples.output_processors["label"].label_vocab
+            labels = {index: label for label, index in vocab.items()}
+            try:
+                for index in range(len(samples)):
+                    sample = samples[index]
+                    signal = sample["signal"]
+                    if tuple(signal.shape) != (1, 240) or not signal.isfinite().all().item():
+                        raise ValueError(f"Invalid signal in window {index}")
+                    counts[labels[sample["label"].item()]] += 1
+            finally:
+                samples.reset()
+        print(f"Participants: {len(dataset.unique_patient_ids)}")
+        print(f"{counts.total()} finite windows of shape (1, 240)")
+        print(f"Baseline: {counts['baseline']}, stress: {counts['stress']}")
+
+
+    if __name__ == "__main__":
+        main()
+
+.. code-block:: powershell
+
+    pixi run -e test python validate_wesad.py --dataset-root "D:\Datasets\WESAD" --cache-dir "D:\WESAD-cache"
 
 Writing a Custom Task
 ----------------------

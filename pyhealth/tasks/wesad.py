@@ -103,7 +103,8 @@ class WESADStressClassification(BaseTask):
 
             with ZipFile(archive_path) as archive:
                 with archive.open(member_path) as recording_file:
-                    recording = pickle.load(recording_file)
+                    # The original recordings contain Python 2 NumPy pickles.
+                    recording = pickle.load(recording_file, encoding="latin1")
             eda, labels = self._extract_signals(recording, member_path)
 
             label_eda_samples = labels.size // label_samples_per_eda
