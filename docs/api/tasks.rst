@@ -68,6 +68,27 @@ After you define a task:
 - Discover how to customize processor behavior with kwargs tuples
 - Understand processor types for different data modalities (text, images, signals, etc.)
 
+WESAD wrist EDA stress classification
+--------------------------------------
+
+The WESAD adapter indexes each participant's ``WESAD.zip`` member without
+extracting it. ``WESADStressClassification`` loads wrist EDA at 4 Hz and the
+recording labels at 700 Hz, then creates non-overlapping windows of a
+configurable duration:
+
+.. code-block:: python
+
+    from pyhealth.datasets import WESADDataset
+    from pyhealth.tasks import WESADStressClassification
+
+    dataset = WESADDataset(root="data/wesad")
+    samples = dataset.set_task(WESADStressClassification(window_seconds=60))
+
+Label code 1 means baseline and code 2 means stress. A window is kept only
+when all its 700 Hz labels have the same target code; windows containing a
+transition or any other code (0 or 3-7) are discarded rather than assigned a
+majority label. Only complete windows are emitted.
+
 Writing a Custom Task
 ----------------------
 

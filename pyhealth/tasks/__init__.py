@@ -171,6 +171,7 @@ from .iiic_seizure_classification import (
     EEGSeizureIIIC as EEGSeizureIIIC,
     IIICSeizureClassification as IIICSeizureClassification,
 )
+from .wesad import WESADStressClassification as WESADStressClassification
 from .variant_classification import (
     MutationPathogenicityPrediction,
     VariantClassificationClinVar,
